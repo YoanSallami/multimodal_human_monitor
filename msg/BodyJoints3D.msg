@@ -1,0 +1,19 @@
+# The body joints following the COCO model
+geometry_msgs/Point nose
+geometry_msgs/Point neck
+geometry_msgs/Point rshoulder
+geometry_msgs/Point relbow
+geometry_msgs/Point rwrist
+geometry_msgs/Point lshoulder
+geometry_msgs/Point lelbow
+geometry_msgs/Point lwrist
+geometry_msgs/Point rhip
+geometry_msgs/Point rknee
+geometry_msgs/Point rankle
+geometry_msgs/Point lhip
+geometry_msgs/Point lknee
+geometry_msgs/Point lankle
+geometry_msgs/Point reye
+geometry_msgs/Point leye
+geometry_msgs/Point rear
+geometry_msgs/Point lear

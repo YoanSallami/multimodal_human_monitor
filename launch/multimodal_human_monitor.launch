@@ -1,0 +1,4 @@
+<launch>
+    <node pkg="multimodal_human_monitor" type="multimodal_human_monitor_node.py" name="multimodal_human_monitor"
+    args="base $(find laas_models)/models/humans/" output="screen"/>
+</launch>

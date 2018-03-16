@@ -1,2 +1,2 @@
 # multimodal_human_monitor
-Monitor the humans and add them in the given Underworlds target world
+Monitor humans from multiple modalities and add them in given Underworlds target world
