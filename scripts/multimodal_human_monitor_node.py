@@ -16,10 +16,11 @@ from underworlds.helpers.geometry import get_world_transform
 from underworlds.tools.loader import ModelLoader
 from underworlds.helpers.transformations import translation_matrix, quaternion_matrix, euler_matrix, \
     translation_from_matrix, quaternion_from_matrix, quaternion_from_euler, rotation_from_matrix
-from multimodal_human_provider.msg import GazeInfoArray, VoiceActivityArray
+from multimodal_human_provider.msg import GazeInfoArray, VoiceActivityArray, TrackedPersonArray
 from underworlds.types import Camera, Mesh, MESH, Situation
 from geometry_msgs.msg import Point, PointStamped
 from std_srvs.srv import Empty
+from std_msgs.msg import String
 from nao_interaction_msgs.srv import TrackerLookAt
 from geometry_msgs.msg import TransformStamped
 from tf2_msgs.msg import TFMessage
@@ -73,12 +74,16 @@ class MultimodalHumanMonitor(object):
                         "gaze": rospy.Publisher("gaze_attention_point", PointStamped, queue_size=5),
                         "reactive": rospy.Publisher("reactive_attention_point", PointStamped, queue_size=5),
                         "effective": rospy.Publisher("effective_attention_point", PointStamped, queue_size=5),
-                        "goal_oriented": rospy.Publisher("goal_oriented_attention_point", PointStamped, queue_size=5)}
+                        "goal_oriented": rospy.Publisher("goal_oriented_attention_point", PointStamped, queue_size=5),
+                        "situation_log": rospy.Publisher("human_monitor_log", String, queue_size=5)}
 
         self.ros_sub = {"gaze": message_filters.Subscriber("wp2/gaze", GazeInfoArray),
-                        "voice": message_filters.Subscriber("wp2/voice", VoiceActivityArray)}
+                        "voice": message_filters.Subscriber("wp2/voice", VoiceActivityArray),
+                        "person": message_filters.Subscriber("wp2/person", TrackedPersonArray)}
 
-        self.ts = message_filters.TimeSynchronizer([self.ros_sub["gaze"], self.ros_sub["voice"]], 10)
+        self.ros_services_proxy = {"lookat": rospy.ServiceProxy("/deictic_gestures/look_at", PointStamped)}
+
+        self.ts = message_filters.TimeSynchronizer([self.ros_sub["gaze"], self.ros_sub["voice"], self.ros_sub["person"]], 10)
 
         self.ts.registerCallback(self.callback)
 
@@ -87,6 +92,17 @@ class MultimodalHumanMonitor(object):
         self.head_signal_dq = deque()
 
         self.already_removed_nodes = []
+
+        self.current_situations_map = {}
+
+        self.human_seen = []
+        self.previous_human_seen = []
+
+        self.human_speaking = []
+        self.previous_human_speaking = []
+
+        self.human_lookat = {}
+        self.previous_human_lookat = {}
 
         nodes_loaded = []
 
@@ -114,20 +130,39 @@ class MultimodalHumanMonitor(object):
         new_node.parent = self.target.scene.rootnode.id
         return new_node
 
-    def start_lookat_situation(self, subject_name, object_name):
-        sit = Situation(desc="lookat("+subject_name+","+object_name+")")
+    def start_n2_situation(self, predicate, subject_name, object_name):
+        description = predicate+"("+subject_name+","+object_name+")"
+        sit = Situation(desc=description)
+        self.current_situations_map[description] = sit
+        self.ros_pub["situation_log"].publish("START " + description)
         self.target.timeline.start(sit)
         return sit.id
 
-    def start_speaking_situation(self, subject_name):
-        sit = Situation(desc="speaking("+subject_name+")")
+    def start_n1_situation(self, predicate, subject_name):
+        description = predicate+"("+subject_name+")"
+        sit = Situation(desc=description)
+        self.current_situations_map[description] = sit
+        self.ros_pub["situation_log"].publish("START " + description)
         self.target.timeline.start(sit)
         return sit.id
 
-    def start_speaking_to_situation(self, subject_name, object_name):
-        sit = Situation(desc="speakingto("+subject_name+","+object_name+")")
-        self.target.timeline.start(sit)
-        return sit.id
+    def end_n1_situation(self, predicate, subject_name):
+        description = predicate+"("+subject_name+")"
+        sit = self.current_situations_map[description]
+        self.ros_pub["situation_log"].publish("END "+description)
+        try:
+            self.target.timeline.end(sit)
+        except Exception as e:
+            rospy.logwarn("[robot_monitor] Exception occurred : "+str(e))
+
+    def end_n2_situation(self, predicate, subject_name, object_name):
+        description = predicate+"("+subject_name+","+object_name+")"
+        sit = self.current_situations_map[description]
+        self.ros_pub["situation_log"].publish("END "+description)
+        try:
+            self.target.timeline.end(sit)
+        except Exception as e:
+            rospy.logwarn("[robot_monitor] Exception occurred : "+str(e))
 
     def look_at(self, stamped_point):
         self.ros_pub["effective"].publish(stamped_point)
@@ -151,49 +186,54 @@ class MultimodalHumanMonitor(object):
         except rospy.ServiceException, e:
             print "Service call failed: %s" % e
 
-    def callback(self, gaze_msg, voice_msg):
+    def callback(self, gaze_msg, voice_msg, person_msg):
         nodes_to_update = []
         gaze_attention_point = None
         voice_attention_point = None
         reactive_attention_point = None
-
+        self.previous_human_seen = self.human_seen
+        self.human_seen = []
+        self.previous_human_speaking = self.human_speaking
+        self.human_speaking = []
+        self.previous_human_lookat = self.human_lookat
+        self.human_lookat = {}
         # VOICE
         min_dist = 10000
         for j, voice in enumerate(voice_msg.data):
             if voice.person_id in self.human_cameras_ids:
                 if voice.is_speaking:
                     human_node = self.target.scene.nodes[self.human_cameras_ids[voice.person_id]]
-                    self.start_speaking_situation(human_node.name)
+
+                    self.human_speaking.append("human-"+voice.person_id)
+
                     if self.human_distances[voice.person_id] < min_dist:
                         min_dist = self.human_distances[voice.person_id]
                         point = translation_from_matrix(human_node.transformation)
                         voice_attention_point = PointStamped()
                         voice_attention_point.header.frame_id = self.reference_frame
                         voice_attention_point.point = Point(point[0], point[1], point[2])
-        # GAZE
+
+        # PERSON
         min_dist = 10000
-        if len(gaze_msg.data) > 0:
-            rospy.logwarn("[human_monitor] pepper see %s human" % len(gaze_msg.data))
-            for i, gaze in enumerate(gaze_msg.data):
-                human_id = gaze.person_id
+        if len(person_msg.data) > 0:
+
+            for i, person in enumerate(person_msg.data):
+                human_id = person.person_id
 
                 if human_id not in self.nb_gaze_detected:
                     self.nb_gaze_detected[human_id] = 0
                 else:
                     self.nb_gaze_detected[human_id] += 1
 
-                if gaze.head_gaze_available:
+                if person.is_identified > 4:
                     new_node = self.create_human_pov(human_id)
                     if human_id in self.human_cameras_ids:
                         new_node.id = self.human_cameras_ids[human_id]
 
-                    t = [gaze.head_gaze.position.x, gaze.head_gaze.position.y, gaze.head_gaze.position.z]
-                    q = [gaze.head_gaze.orientation.x, gaze.head_gaze.orientation.y, gaze.head_gaze.orientation.z, gaze.head_gaze.orientation.w]
+                    t = [person.head_pose.position.x, person.head_pose.position.y, person.head_pose.position.z]
+                    q = [person.head_pose.orientation.x, person.head_pose.orientation.y, person.head_pose.orientation.z, person.head_pose.orientation.w]
 
                     dist = math.sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2])
-
-                    if dist < MIN_DIST_DETECTION:
-                        continue
 
                     msg = self.tfBuffer.lookup_transform(self.reference_frame, gaze_msg.header.frame_id, rospy.Time(0))
                     trans = [msg.transform.translation.x, msg.transform.translation.y, msg.transform.translation.z]
@@ -205,11 +245,8 @@ class MultimodalHumanMonitor(object):
 
                     new_node.transformation = numpy.dot(transform, offset)
 
-                    if translation_from_matrix(new_node.transformation)[2] > MAX_HEIGHT:
-                        continue
-
-                    if dist < min_dist:
-                        min_dist = dist
+                    if person.head_distance < min_dist:
+                        min_dist = person.head_distance
                         gaze_attention_point = PointStamped()
                         gaze_attention_point.header.frame_id = gaze_msg.header.frame_id
                         gaze_attention_point.header.stamp = rospy.Time.now()
@@ -219,6 +256,8 @@ class MultimodalHumanMonitor(object):
                         self.human_distances[human_id] = dist
                         self.human_cameras_ids[human_id] = new_node.id
                         nodes_to_update.append(new_node)
+
+                        self.human_seen.append("human-"+human_id)
 
                         if human_id not in self.human_bodies:
                             rospy.logwarn("[human_monitor] add human-"+str(human_id))
@@ -234,6 +273,48 @@ class MultimodalHumanMonitor(object):
                             self.human_bodies[human_id]["face"] = new_node.id
                             nodes_to_update.append(new_node)
 
+            #GAZE
+            for j, gaze in enumerate(gaze_msg.data):
+                if gaze.person_id in self.human_cameras_ids:
+                    if gaze.probability_looking_at_robot > LOOK_AT_THRESHOLD:
+                        self.human_lookat["human-" + gaze.person_id] = "robot"
+                    else:
+                        if gaze.probability_looking_at_screen > LOOK_AT_THRESHOLD:
+                            self.human_lookat["human-" + gaze.person_id] = "screen"
+                        else:
+                            for attention in gaze.attentions:
+                                if attention.target_id in self.human_cameras_ids:
+                                    if attention.probability_looking_at_target > LOOK_AT_THRESHOLD:
+                                        self.human_lookat["human-" + gaze.person_id] = "human-"+attention.target_id
+
+            for human, target in self.human_lookat.values():
+                if human not in self.previous_human_lookat:
+                    self.start_n2_situation("lookat", human, target)
+                else:
+                    if target != self.previous_human_lookat[human]:
+                        self.end_n2_situation("lookat", human, self.previous_human_lookat[human])
+                        self.start_n2_situation("lookat", human, target)
+
+            for human, target in self.previous_human_lookat.values():
+                if human not in self.human_lookat:
+                    self.end_n2_situation("lookat", human, target)
+
+            for human in self.human_speaking:
+                if human not in self.previous_human_speaking:
+                    self.start_n1_situation("speaking", human)
+
+            for human in self.previous_human_speaking:
+                if human not in self.human_speaking:
+                    self.end_n1_situation("speaking", human)
+
+            for human in self.human_seen:
+                if human not in self.previous_human_seen:
+                    self.start_n2_situation("perceive", "robot", human)
+
+            for human in self.previous_human_seen:
+                if human not in self.human_seen:
+                    self.end_n2_situation("perceive", "robot", human)
+
             if gaze_attention_point:
                 self.ros_pub["gaze"].publish(gaze_attention_point)
                 reactive_attention_point = gaze_attention_point
@@ -242,6 +323,8 @@ class MultimodalHumanMonitor(object):
                 reactive_attention_point = voice_attention_point
             if reactive_attention_point:
                 self.ros_pub["reactive"].publish(reactive_attention_point)
+
+            self.ros_services_proxy["lookat"](reactive_attention_point)
 
             if nodes_to_update:
                 self.target.scene.nodes.update(nodes_to_update)

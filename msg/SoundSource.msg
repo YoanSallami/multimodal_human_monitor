@@ -1,3 +1,3 @@
-geometry_msgs/Quaternion direction
+geometry_msgs/Vector3 direction
 
 float64 level
