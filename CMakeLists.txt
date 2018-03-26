@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   visualization_msgs
   message_generation
+  perception_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -63,6 +64,8 @@ add_message_files(
   TrackedPerson.msg
   TrackedPersonArray.msg
   TargetNameWithProbability.msg
+  VoiceActivity.msg
+  VoiceActivityArray.msg
 )
 
 ## Generate services in the 'srv' folder

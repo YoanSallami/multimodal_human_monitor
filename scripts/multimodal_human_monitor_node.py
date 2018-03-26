@@ -16,7 +16,7 @@ from underworlds.helpers.geometry import get_world_transform
 from underworlds.tools.loader import ModelLoader
 from underworlds.helpers.transformations import translation_matrix, quaternion_matrix, euler_matrix, \
     translation_from_matrix, quaternion_from_matrix, quaternion_from_euler, rotation_from_matrix
-from multimodal_human_provider.msg import GazeInfoArray, VoiceActivityArray, TrackedPersonArray
+from perception_msgs.msg import GazeInfoArray, VoiceActivityArray, TrackedPersonArray
 from underworlds.types import Camera, Mesh, MESH, Situation
 from geometry_msgs.msg import Point, PointStamped
 from std_srvs.srv import Empty
@@ -35,6 +35,13 @@ MIN_NB_DETECTION = 5
 MIN_DIST_DETECTION = 0.2
 MAX_HEIGHT = 2.3
 MAX_SPEED_LOOKAT = 0.1
+
+INTIMATE_MAX_DISTANCE = 0.45
+PERSONAL_MAX_DISTANCE = 1.2
+SOCIAL_MAX_DISTANCE = 3.6
+PUBLIC_MAX_DISTANCE = 7.6
+
+HYST_DELTA = 0.1
 
 
 # just for convenience
@@ -70,24 +77,21 @@ class MultimodalHumanMonitor(object):
         self.robot_name = rospy.get_param("robot_name", "pepper")
         self.is_robot_moving = rospy.get_param("is_robot_moving", False)
 
-        self.ros_pub = {"voice": rospy.Publisher("voice_attention_point", PointStamped, queue_size=5),
-                        "gaze": rospy.Publisher("gaze_attention_point", PointStamped, queue_size=5),
-                        "reactive": rospy.Publisher("reactive_attention_point", PointStamped, queue_size=5),
-                        "effective": rospy.Publisher("effective_attention_point", PointStamped, queue_size=5),
-                        "goal_oriented": rospy.Publisher("goal_oriented_attention_point", PointStamped, queue_size=5),
-                        "situation_log": rospy.Publisher("human_monitor_log", String, queue_size=5)}
+        self.ros_pub = {"voice": rospy.Publisher("human_monitor/voice_attention_point", PointStamped, queue_size=5),
+                        "gaze": rospy.Publisher("human_monitor/gaze_attention_point", PointStamped, queue_size=5),
+                        "reactive": rospy.Publisher("human_monitor/reactive_attention_point", PointStamped, queue_size=5),
+                        "effective": rospy.Publisher("human_monitor/effective_attention_point", PointStamped, queue_size=5),
+                        "goal_oriented": rospy.Publisher("human_monitor/goal_oriented_attention_point", PointStamped, queue_size=5),
+                        "situation_log": rospy.Publisher("human_monitor/log", String, queue_size=5),
+                        "tf": rospy.Publisher("/tf", TFMessage, queue_size=10)}
 
         self.ros_sub = {"gaze": message_filters.Subscriber("wp2/gaze", GazeInfoArray),
                         "voice": message_filters.Subscriber("wp2/voice", VoiceActivityArray),
-                        "person": message_filters.Subscriber("wp2/person", TrackedPersonArray)}
+                        "person": message_filters.Subscriber("wp2/track", TrackedPersonArray)}
 
-        self.ros_services_proxy = {"lookat": rospy.ServiceProxy("/deictic_gestures/look_at", PointStamped)}
-
-        self.ts = message_filters.TimeSynchronizer([self.ros_sub["gaze"], self.ros_sub["voice"], self.ros_sub["person"]], 10)
+        self.ts = message_filters.TimeSynchronizer([self.ros_sub["gaze"], self.ros_sub["voice"], self.ros_sub["person"]], 50)
 
         self.ts.registerCallback(self.callback)
-
-        self.human_distances = {}
 
         self.head_signal_dq = deque()
 
@@ -103,6 +107,16 @@ class MultimodalHumanMonitor(object):
 
         self.human_lookat = {}
         self.previous_human_lookat = {}
+
+        self.human_distances = {}
+        self.human_intimate = []
+        self.previous_human_intimate = []
+        self.human_personal = []
+        self.previous_human_personal = []
+        self.human_social = []
+        self.previous_human_social = []
+        self.human_public = []
+        self.previous_human_public = []
 
         nodes_loaded = []
 
@@ -133,17 +147,19 @@ class MultimodalHumanMonitor(object):
     def start_n2_situation(self, predicate, subject_name, object_name):
         description = predicate+"("+subject_name+","+object_name+")"
         sit = Situation(desc=description)
+        sit.starttime = time.time()
         self.current_situations_map[description] = sit
         self.ros_pub["situation_log"].publish("START " + description)
-        self.target.timeline.start(sit)
+        self.target.timeline.update(sit)
         return sit.id
 
     def start_n1_situation(self, predicate, subject_name):
         description = predicate+"("+subject_name+")"
         sit = Situation(desc=description)
+        sit.starttime = time.time()
         self.current_situations_map[description] = sit
         self.ros_pub["situation_log"].publish("START " + description)
-        self.target.timeline.start(sit)
+        self.target.timeline.update(sit)
         return sit.id
 
     def end_n1_situation(self, predicate, subject_name):
@@ -197,6 +213,14 @@ class MultimodalHumanMonitor(object):
         self.human_speaking = []
         self.previous_human_lookat = self.human_lookat
         self.human_lookat = {}
+        self.previous_human_intimate = self.human_intimate
+        self.previous_human_personal = self.human_personal
+        self.previous_human_social = self.human_social
+        self.previous_human_public = self.human_public
+        self.human_intimate = []
+        self.human_personal = []
+        self.human_social = []
+        self.human_public = []
         # VOICE
         min_dist = 10000
         for j, voice in enumerate(voice_msg.data):
@@ -204,10 +228,10 @@ class MultimodalHumanMonitor(object):
                 if voice.is_speaking:
                     human_node = self.target.scene.nodes[self.human_cameras_ids[voice.person_id]]
 
-                    self.human_speaking.append("human-"+voice.person_id)
+                    self.human_speaking.append("human-"+str(voice.person_id))
 
-                    if self.human_distances[voice.person_id] < min_dist:
-                        min_dist = self.human_distances[voice.person_id]
+                    if self.human_distances["human-"+str(voice.person_id)] < min_dist:
+                        min_dist = self.human_distances["human-"+str(voice.person_id)]
                         point = translation_from_matrix(human_node.transformation)
                         voice_attention_point = PointStamped()
                         voice_attention_point.header.frame_id = self.reference_frame
@@ -252,68 +276,52 @@ class MultimodalHumanMonitor(object):
                         gaze_attention_point.header.stamp = rospy.Time.now()
                         gaze_attention_point.point = Point(t[0], t[1], t[2])
 
-                    if self.nb_gaze_detected[human_id] > MIN_NB_DETECTION:
-                        self.human_distances[human_id] = dist
-                        self.human_cameras_ids[human_id] = new_node.id
+                    self.human_distances["human-"+str(human_id)] = dist
+                    self.human_cameras_ids[human_id] = new_node.id
+                    nodes_to_update.append(new_node)
+
+                    self.human_seen.append("human-"+str(human_id))
+
+                    if human_id not in self.human_bodies:
+                        rospy.logwarn("[human_monitor] add human-"+str(human_id))
+                        self.human_bodies[human_id] = {}
+
+                    if "face" not in self.human_bodies[human_id]:
+                        new_node = Mesh(name="human_face-"+str(human_id))
+                        new_node.properties["mesh_ids"] = self.human_meshes["face"]
+                        new_node.properties["aabb"] = self.human_aabb["face"]
+                        new_node.parent = self.human_cameras_ids[human_id]
+                        offset = euler_matrix(math.radians(90), math.radians(0), math.radians(90), 'rxyz')
+                        new_node.transformation = numpy.dot(new_node.transformation, offset)
+                        self.human_bodies[human_id]["face"] = new_node.id
                         nodes_to_update.append(new_node)
-
-                        self.human_seen.append("human-"+human_id)
-
-                        if human_id not in self.human_bodies:
-                            rospy.logwarn("[human_monitor] add human-"+str(human_id))
-                            self.human_bodies[human_id] = {}
-
-                        if "face" not in self.human_bodies[human_id]:
-                            new_node = Mesh(name="human_face-"+str(human_id))
-                            new_node.properties["mesh_ids"] = self.human_meshes["face"]
-                            new_node.properties["aabb"] = self.human_aabb["face"]
-                            new_node.parent = self.human_cameras_ids[human_id]
-                            offset = euler_matrix(math.radians(90), math.radians(0), math.radians(90), 'rxyz')
-                            new_node.transformation = numpy.dot(new_node.transformation, offset)
-                            self.human_bodies[human_id]["face"] = new_node.id
-                            nodes_to_update.append(new_node)
 
             #GAZE
             for j, gaze in enumerate(gaze_msg.data):
                 if gaze.person_id in self.human_cameras_ids:
                     if gaze.probability_looking_at_robot > LOOK_AT_THRESHOLD:
-                        self.human_lookat["human-" + gaze.person_id] = "robot"
+                        self.human_lookat["human-" + str(gaze.person_id)] = "robot"
                     else:
                         if gaze.probability_looking_at_screen > LOOK_AT_THRESHOLD:
-                            self.human_lookat["human-" + gaze.person_id] = "screen"
+                            self.human_lookat["human-" + str(gaze.person_id)] = "screen"
                         else:
                             for attention in gaze.attentions:
                                 if attention.target_id in self.human_cameras_ids:
                                     if attention.probability_looking_at_target > LOOK_AT_THRESHOLD:
-                                        self.human_lookat["human-" + gaze.person_id] = "human-"+attention.target_id
+                                        self.human_lookat["human-"+str(gaze.person_id)] = "human-"+str(attention.target_id)
 
-            for human, target in self.human_lookat.values():
-                if human not in self.previous_human_lookat:
-                    self.start_n2_situation("lookat", human, target)
-                else:
-                    if target != self.previous_human_lookat[human]:
-                        self.end_n2_situation("lookat", human, self.previous_human_lookat[human])
-                        self.start_n2_situation("lookat", human, target)
-
-            for human, target in self.previous_human_lookat.values():
-                if human not in self.human_lookat:
-                    self.end_n2_situation("lookat", human, target)
-
-            for human in self.human_speaking:
-                if human not in self.previous_human_speaking:
-                    self.start_n1_situation("speaking", human)
-
-            for human in self.previous_human_speaking:
-                if human not in self.human_speaking:
-                    self.end_n1_situation("speaking", human)
-
-            for human in self.human_seen:
-                if human not in self.previous_human_seen:
-                    self.start_n2_situation("perceive", "robot", human)
-
-            for human in self.previous_human_seen:
-                if human not in self.human_seen:
-                    self.end_n2_situation("perceive", "robot", human)
+            for human, dist in self.human_distances.items():
+                if dist < PUBLIC_MAX_DISTANCE:
+                    if dist < SOCIAL_MAX_DISTANCE:
+                        if dist < PERSONAL_MAX_DISTANCE:
+                            if dist < INTIMATE_MAX_DISTANCE:
+                                self.human_intimate.append(human)
+                            else:
+                                self.human_personal.append(human)
+                        else:
+                            self.human_social.append(human)
+                    else:
+                        self.human_public.append(human)
 
             if gaze_attention_point:
                 self.ros_pub["gaze"].publish(gaze_attention_point)
@@ -324,10 +332,67 @@ class MultimodalHumanMonitor(object):
             if reactive_attention_point:
                 self.ros_pub["reactive"].publish(reactive_attention_point)
 
-            self.ros_services_proxy["lookat"](reactive_attention_point)
-
             if nodes_to_update:
                 self.target.scene.nodes.update(nodes_to_update)
+
+            self.compute_situations()
+
+    def compute_situations(self):
+        # for human in self.human_intimate:
+        #     if human not in self.previous_human_intimate:
+        #         self.start_n2_situation("inIntimateSpace", human, "robot")
+        # for human in self.previous_human_intimate:
+        #     if human not in self.human_intimate:
+        #         self.end_n2_situation("inIntimateSpace", human, "robot")
+        #
+        # for human in self.human_personal:
+        #     if human not in self.previous_human_personal:
+        #         self.start_n2_situation("inPersonalSpace", human, "robot")
+        # for human in self.previous_human_personal:
+        #     if human not in self.human_personal:
+        #         self.end_n2_situation("inPersonalSpace", human, "robot")
+        #
+        # for human in self.human_social:
+        #     if human not in self.previous_human_social:
+        #         self.start_n2_situation("inSocialSpace", human, "robot")
+        # for human in self.previous_human_social:
+        #     if human not in self.human_social:
+        #         self.end_n2_situation("inSocialSpace", human, "robot")
+        #
+        # for human in self.human_public:
+        #     if human not in self.previous_human_intimate:
+        #         self.start_n2_situation("inPublicSpace", human, "robot")
+        # for human in self.previous_human_social:
+        #     if human not in self.human_social:
+        #         self.end_n2_situation("inPublicSpace", human, "robot")
+
+        for human, target in self.human_lookat.values():
+            if human not in self.previous_human_lookat:
+                self.start_n2_situation("lookAt", human, target)
+            else:
+                if target != self.previous_human_lookat[human]:
+                    self.end_n2_situation("lookAt", human, self.previous_human_lookat[human])
+                    self.start_n2_situation("lookAt", human, target)
+
+        for human, target in self.previous_human_lookat.values():
+            if human not in self.human_lookat:
+                self.end_n2_situation("lookAt", human, target)
+
+        for human in self.human_speaking:
+            if human not in self.previous_human_speaking:
+                self.start_n1_situation("speaking", human)
+
+        for human in self.previous_human_speaking:
+            if human not in self.human_speaking:
+                self.end_n1_situation("speaking", human)
+
+        for human in self.human_seen:
+            if human not in self.previous_human_seen:
+                self.start_n2_situation("perceive", "robot", human)
+
+        for human in self.previous_human_seen:
+            if human not in self.human_seen:
+                self.end_n2_situation("perceive", "robot", human)
 
     def publish_human_tf_frames(self):
         for node in self.target.scene.nodes:
@@ -338,11 +403,11 @@ class MultimodalHumanMonitor(object):
                 t.header.frame_id = "map"
                 t.header.stamp = rospy.Time.now()
                 t.child_frame_id = node.name
-                position = translation_from_matrix(get_world_transform(self.target, node))
+                position = translation_from_matrix(get_world_transform(self.target.scene, node))
                 t.transform.translation.x = position[0]
                 t.transform.translation.y = position[1]
                 t.transform.translation.z = position[2]
-                orientation = quaternion_from_matrix(get_world_transform(self.target, node))
+                orientation = quaternion_from_matrix(get_world_transform(self.target.scene, node))
                 t.transform.rotation.x = orientation[0]
                 t.transform.rotation.y = orientation[1]
                 t.transform.rotation.z = orientation[2]
@@ -351,24 +416,25 @@ class MultimodalHumanMonitor(object):
                 tfm = TFMessage([t])
                 self.ros_pub["tf"].publish(tfm)
 
-                t = TransformStamped()
-                t.header.frame_id = "map"
-                t.header.stamp = rospy.Time.now()
-                t.child_frame_id = "human_footprint-"+human_id
-                position = translation_from_matrix(node.transformation)
-                t.transform.translation.x = position[0]
-                t.transform.translation.y = position[1]
-                t.transform.translation.z = 0
-                rotation = rotation_from_matrix(node.transformation)
-                rotation = [0, 0, rotation[2]]
-                orientation = quaternion_from_euler(rotation, "rxyz")
-                t.transform.rotation.x = orientation[0]
-                t.transform.rotation.y = orientation[1]
-                t.transform.rotation.z = orientation[2]
-                t.transform.rotation.w = orientation[3]
-
-                tfm = TFMessage([t])
-                self.ros_pub["tf"].publish(tfm)
+                # t = TransformStamped()
+                # t.header.frame_id = "map"
+                # t.header.stamp = rospy.Time.now()
+                # t.child_frame_id = "human_footprint-"+human_id
+                # position = translation_from_matrix(node.transformation)
+                # t.transform.translation.x = position[0]
+                # t.transform.translation.y = position[1]
+                # t.transform.translation.z = 0
+                # rospy.logwarn(node.transformation)
+                # q = quaternion_from_matrix(node.transformation)
+                # rotation = [0, 0, rotation[2]]
+                # orientation = euler_from_quaternion(rotation, "rxyz")
+                # t.transform.rotation.x = orientation[0]
+                # t.transform.rotation.y = orientation[1]
+                # t.transform.rotation.z = orientation[2]
+                # t.transform.rotation.w = orientation[3]
+                #
+                # tfm = TFMessage([t])
+                # self.ros_pub["tf"].publish(tfm)
 
     def clean_humans(self):
         nodes_to_remove = []
