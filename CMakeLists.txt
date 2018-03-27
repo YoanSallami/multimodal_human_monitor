@@ -13,7 +13,6 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   geometry_msgs
   visualization_msgs
-  message_generation
   perception_msgs
 )
 
@@ -51,22 +50,9 @@ find_package(catkin REQUIRED COMPONENTS
 ##   * add every package in MSG_DEP_SET to generate_messages(DEPENDENCIES ...)
 
 ## Generate messages in the 'msg' folder
-add_message_files(
-  FILES
-  BoundingBox.msg
-  BodyJoint2D.msg
-  BodyJoints2D.msg
-  BodyJoints3D.msg
-  GazeInfo.msg
-  GazeInfoArray.msg
-  PersonTracklet.msg
-  PersonTrackletArray.msg
-  TrackedPerson.msg
-  TrackedPersonArray.msg
-  TargetNameWithProbability.msg
-  VoiceActivity.msg
-  VoiceActivityArray.msg
-)
+#add_message_files(
+#  FILES
+#)
 
 ## Generate services in the 'srv' folder
 # add_service_files(
@@ -83,13 +69,13 @@ add_message_files(
 # )
 
 ## Generate added messages and services with any dependencies listed here
-generate_messages(
-  DEPENDENCIES
-  std_msgs
-  sensor_msgs
-  geometry_msgs
-  visualization_msgs
-)
+#generate_messages(
+#  DEPENDENCIES
+#  std_msgs
+#  sensor_msgs
+#  geometry_msgs
+#  visualization_msgs
+#)
 
 ################################################
 ## Declare ROS dynamic reconfigure parameters ##
