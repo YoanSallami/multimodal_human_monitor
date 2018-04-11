@@ -17,13 +17,14 @@ from underworlds.tools.loader import ModelLoader
 from underworlds.helpers.transformations import translation_matrix, quaternion_matrix, euler_matrix, \
     translation_from_matrix, quaternion_from_matrix, quaternion_from_euler, rotation_from_matrix
 from perception_msgs.msg import GazeInfoArray, VoiceActivityArray, TrackedPersonArray
-from underworlds.types import Camera, Mesh, MESH, Situation, ENTITY
+from underworlds.types import Camera, Mesh, MESH, Situation, Entity
 from geometry_msgs.msg import Point, PointStamped
 from std_srvs.srv import Empty
 from std_msgs.msg import String
 from nao_interaction_msgs.srv import TrackerLookAt
 from geometry_msgs.msg import TransformStamped
 from tf2_msgs.msg import TFMessage
+from head_manager.msg import TargetWithPriority
 
 TF_CACHE_TIME = 5.0
 DEFAULT_CLIP_PLANE_NEAR = 0.01
@@ -42,19 +43,18 @@ MAX_UPDATE_TIME_BEFORE_CLEAN = 10.0
 CLOSE_MAX_DISTANCE = 1.0
 NEAR_MAX_DISTANCE = 2.0
 
-HYST_DELTA = 0.1
+JOINT_ATTENTION_MIN_DURATION = 1.5
 
-
-# just for convenience
-def strip_leading_slash(s):
-    return s[1:] if s.startswith("/") else s
-
+MONITORING_DEFAULT_PRIORITY = 100
+JOINT_ATTENTION_PRIORITY = 150
+VOICE_ATTENTION_PRIORITY = 200
 
 # just for convenience
 def transformation_matrix(t, q):
     translation_mat = translation_matrix(t)
     rotation_mat = quaternion_matrix(q)
     return numpy.dot(translation_mat, rotation_mat)
+
 
 class MultimodalHumanMonitor(object):
     def __init__(self, ctx, output_world, mesh_dir, reference_frame):
@@ -80,9 +80,8 @@ class MultimodalHumanMonitor(object):
 
         self.ros_pub = {"voice": rospy.Publisher("human_monitor/voice_attention_point", PointStamped, queue_size=5),
                         "gaze": rospy.Publisher("human_monitor/gaze_attention_point", PointStamped, queue_size=5),
-                        "reactive": rospy.Publisher("human_monitor/reactive_attention_point", PointStamped, queue_size=5),
-                        "effective": rospy.Publisher("human_monitor/effective_attention_point", PointStamped, queue_size=5),
-                        "goal_oriented": rospy.Publisher("human_monitor/goal_oriented_attention_point", PointStamped, queue_size=5),
+                        "reactive": rospy.Publisher("human_monitor/monitoring_attention_point", PointStamped, queue_size=5),
+                        "monitoring_attention_point": rospy.Publisher("/head_monitoring_target", TargetWithPriority, queue_size=5),
                         "situation_log": rospy.Publisher("human_monitor/log", String, queue_size=5),
                         "tf": rospy.Publisher("/tf", TFMessage, queue_size=10)}
 
@@ -131,6 +130,17 @@ class MultimodalHumanMonitor(object):
 
         self.tfBuffer = tf2_ros.Buffer(rospy.Duration(TF_CACHE_TIME), debug=False)
         self.listener = tf2_ros.TransformListener(self.tfBuffer)
+
+    def parse_situation_desc(self, description):
+        if "," in description:
+            predicate = description.split("(")[0]
+            subject = description.split("(")[1].split(")")[0].split(",")[0]
+            obj = description.split("(")[1].split(")")[0].split(",")[1]
+        else:
+            predicate = description.split("(")[0]
+            subject = description.split("(")[1].split(")")[0]
+            obj = ""
+        return predicate, subject, obj
 
     def create_human_pov(self, id):
         new_node = Camera(name="human-" + str(id))
@@ -218,50 +228,54 @@ class MultimodalHumanMonitor(object):
                     self.nb_gaze_detected[human_id] += 1
 
                 if person.is_identified > MIN_NB_DETECTION:
-                    new_node = self.create_human_pov(human_id)
-                    if human_id in self.human_cameras_ids:
-                        new_node.id = self.human_cameras_ids[human_id]
+                    try:
+                        new_node = self.create_human_pov(human_id)
+                        if human_id in self.human_cameras_ids:
+                            new_node.id = self.human_cameras_ids[human_id]
 
-                    t = [person.head_pose.position.x, person.head_pose.position.y, person.head_pose.position.z]
-                    q = [person.head_pose.orientation.x, person.head_pose.orientation.y, person.head_pose.orientation.z, person.head_pose.orientation.w]
+                        t = [person.head_pose.position.x, person.head_pose.position.y, person.head_pose.position.z]
+                        q = [person.head_pose.orientation.x, person.head_pose.orientation.y, person.head_pose.orientation.z, person.head_pose.orientation.w]
 
-                    dist = math.sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2])
+                        dist = math.sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2])
 
-                    msg = self.tfBuffer.lookup_transform(self.reference_frame, gaze_msg.header.frame_id, rospy.Time(0))
-                    trans = [msg.transform.translation.x, msg.transform.translation.y, msg.transform.translation.z]
-                    rot = [msg.transform.rotation.x, msg.transform.rotation.y, msg.transform.rotation.z, msg.transform.rotation.w]
+                        msg = self.tfBuffer.lookup_transform(self.reference_frame, gaze_msg.header.frame_id, rospy.Time(0))
+                        trans = [msg.transform.translation.x, msg.transform.translation.y, msg.transform.translation.z]
+                        rot = [msg.transform.rotation.x, msg.transform.rotation.y, msg.transform.rotation.z, msg.transform.rotation.w]
 
-                    offset = euler_matrix(0, math.radians(90), math.radians(90), "rxyz")
+                        offset = euler_matrix(0, math.radians(90), math.radians(90), "rxyz")
 
-                    transform = numpy.dot(transformation_matrix(trans, rot), transformation_matrix(t, q))
+                        transform = numpy.dot(transformation_matrix(trans, rot), transformation_matrix(t, q))
 
-                    new_node.transformation = numpy.dot(transform, offset)
+                        new_node.transformation = numpy.dot(transform, offset)
 
-                    if person.head_distance < min_dist:
-                        min_dist = person.head_distance
-                        gaze_attention_point = PointStamped()
-                        gaze_attention_point.header.frame_id = gaze_msg.header.frame_id
-                        gaze_attention_point.header.stamp = rospy.Time.now()
-                        gaze_attention_point.point = Point(t[0], t[1], t[2])
+                        if person.head_distance < min_dist:
+                            min_dist = person.head_distance
+                            gaze_attention_point = PointStamped()
+                            gaze_attention_point.header.frame_id = gaze_msg.header.frame_id
+                            gaze_attention_point.header.stamp = rospy.Time.now()
+                            gaze_attention_point.point = Point(t[0], t[1], t[2])
 
-                    self.human_distances["human-"+str(human_id)] = dist
-                    self.human_cameras_ids[human_id] = new_node.id
-                    nodes_to_update.append(new_node)
-
-                    self.human_perceived.append("human-"+str(human_id))
-
-                    if human_id not in self.human_bodies:
-                        self.human_bodies[human_id] = {}
-
-                    if "face" not in self.human_bodies[human_id]:
-                        new_node = Mesh(name="human_face-"+str(human_id))
-                        new_node.properties["mesh_ids"] = self.human_meshes["face"]
-                        new_node.properties["aabb"] = self.human_aabb["face"]
-                        new_node.parent = self.human_cameras_ids[human_id]
-                        offset = euler_matrix(math.radians(90), math.radians(0), math.radians(90), 'rxyz')
-                        new_node.transformation = numpy.dot(new_node.transformation, offset)
-                        self.human_bodies[human_id]["face"] = new_node.id
+                        self.human_distances["human-"+str(human_id)] = dist
+                        self.human_cameras_ids[human_id] = new_node.id
                         nodes_to_update.append(new_node)
+
+                        self.human_perceived.append("human-"+str(human_id))
+
+                        if human_id not in self.human_bodies:
+                            self.human_bodies[human_id] = {}
+
+                        if "face" not in self.human_bodies[human_id]:
+                            new_node = Mesh(name="human_face-"+str(human_id))
+                            new_node.properties["mesh_ids"] = self.human_meshes["face"]
+                            new_node.properties["aabb"] = self.human_aabb["face"]
+                            new_node.parent = self.human_cameras_ids[human_id]
+                            offset = euler_matrix(math.radians(90), math.radians(0), math.radians(90), 'rxyz')
+                            new_node.transformation = numpy.dot(new_node.transformation, offset)
+                            self.human_bodies[human_id]["face"] = new_node.id
+                            nodes_to_update.append(new_node)
+                    except (tf2_ros.TransformException, tf2_ros.LookupException, tf2_ros.ConnectivityException,
+                            tf2_ros.ExtrapolationException):
+                            pass
 
             #GAZE
             for j, gaze in enumerate(gaze_msg.data):
@@ -284,19 +298,38 @@ class MultimodalHumanMonitor(object):
                     else:
                         self.human_near.append(human)
 
+        if nodes_to_update:
+            self.target.scene.nodes.update(nodes_to_update)
+
+        self.compute_situations()
+
+        priority = MONITORING_DEFAULT_PRIORITY
         if gaze_attention_point:
+            sit_regex = "^lookat\(%s"%gaze_attention_point.header.frame_id
+            for sit_desc in self.current_situations_map.keys():
+                if re.match(sit_regex, sit_desc):
+                    sit = self.target.timeline[self.current_situations_map[sit_desc]]
+                    if sit.endtime == 0:
+                        if time.time() - sit.starttime > JOINT_ATTENTION_MIN_DURATION:
+                            _,_,obj = self.parse_situation_desc(sit.desc)
+                            if obj != "screen" and obj != "robot":
+                                gaze_attention_point.header.frame_id = obj
+                                gaze_attention_point.point = Point()
+                                priority = JOINT_ATTENTION_PRIORITY
             self.ros_pub["gaze"].publish(gaze_attention_point)
             reactive_attention_point = gaze_attention_point
         if voice_attention_point:
             self.ros_pub["voice"].publish(voice_attention_point)
             reactive_attention_point = voice_attention_point
+            priority = VOICE_ATTENTION_PRIORITY
         if reactive_attention_point:
             self.ros_pub["reactive"].publish(reactive_attention_point)
 
-        if nodes_to_update:
-            self.target.scene.nodes.update(nodes_to_update)
-
-        self.compute_situations()
+        if reactive_attention_point:
+            target_with_priority = TargetWithPriority()
+            target_with_priority.target = reactive_attention_point
+            target_with_priority.priority = priority
+            self.ros_pub["monitoring_attention_point"].publish(target_with_priority)
 
         self.previous_human_perceived = self.human_perceived
         self.previous_human_speaking = self.human_speaking
@@ -371,32 +404,35 @@ class MultimodalHumanMonitor(object):
 
     def clean_humans(self):
         nodes_to_update = []
-        nodes_to_forget = []
 
         for node in self.target.scene.nodes:
-            if re.match("human-", node.name):
+            if re.match("^human-", node.name):
                 if time.time() - node.last_update > MIN_UPDATE_TIME_BEFORE_CLEAN:
-                    if time.time() - node.last_update > MAX_UPDATE_TIME_BEFORE_CLEAN:
-                        for child in node.children:
-                            n = self.target.scene.nodes[child]
-                            n.type = ENTITY
-                            nodes_to_update.append(n)
+                    entity = Entity()
+                    entity.id = node.id
+                    entity.name = node.name
+                    entity.parent = node.parent
+                    entity.transformation = node.transformation
+                    entity.properties = node.properties
+                    nodes_to_update.append(entity)
                     for child in node.children:
                         n = self.target.scene.nodes[child]
-                        nodes_to_forget.append(n)
+                        entity = Entity()
+                        entity.id = n.id
+                        entity.name = n.name
+                        entity.parent = n.parent
+                        entity.transformation = n.transformation
+                        nodes_to_update.append(entity)
+                        self.human_bodies[node.name] = {}
 
         if nodes_to_update:
             self.target.scene.nodes.update(nodes_to_update)
 
-        if nodes_to_forget:
-            self.target.scene.nodes.remove(nodes_to_forget)
-
     def run(self):
         rate = rospy.Rate(30)
         while not rospy.is_shutdown():
+            self.clean_humans()
             self.publish_human_tf_frames()
-            rate.sleep()
-            #self.clean_humans()
 
 
 if __name__ == "__main__":
