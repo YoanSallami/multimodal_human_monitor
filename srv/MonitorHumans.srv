@@ -1,0 +1,4 @@
+string action # "ADD" or "REMOVE"
+string[] humans_to_monitor
+---
+bool success
