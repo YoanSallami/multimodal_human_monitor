@@ -298,16 +298,19 @@ class MultimodalHumanMonitor(object):
             for j, voice in enumerate(voice_msg.data):
                 if voice.person_id in self.human_cameras_ids:
                     if voice.is_speaking:
-                        human_node = self.target.scene.nodes[self.human_cameras_ids[voice.person_id]]
+                        try:
+                            human_node = self.target.scene.nodes[self.human_cameras_ids[voice.person_id]]
 
-                        self.human_speaking.append("human-" + str(voice.person_id))
-                        if "human-" + str(voice.person_id) in self.human_distances:
-                            if self.human_distances["human-" + str(voice.person_id)] < min_dist:
-                                min_dist = self.human_distances["human-" + str(voice.person_id)]
-                                point = translation_from_matrix(human_node.transformation)
-                                voice_attention_point = PointStamped()
-                                voice_attention_point.header.frame_id = self.reference_frame
-                                voice_attention_point.point = Point(point[0], point[1], point[2])
+                            self.human_speaking.append("human-" + str(voice.person_id))
+                            if "human-" + str(voice.person_id) in self.human_distances:
+                                if self.human_distances["human-" + str(voice.person_id)] < min_dist:
+                                    min_dist = self.human_distances["human-" + str(voice.person_id)]
+                                    point = translation_from_matrix(human_node.transformation)
+                                    voice_attention_point = PointStamped()
+                                    voice_attention_point.header.frame_id = self.reference_frame
+                                    voice_attention_point.point = Point(point[0], point[1], point[2])
+                        except:
+                            pass
             #GAZE
             for j, gaze in enumerate(gaze_msg.data):
                 if gaze.person_id in self.human_cameras_ids:

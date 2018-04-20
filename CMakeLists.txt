@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
   visualization_msgs
   perception_msgs
+  perspectives_msgs
   message_generation
 )
 
@@ -59,7 +60,7 @@ find_package(catkin REQUIRED COMPONENTS
  add_service_files(
    FILES
    MonitorHumans.srv
-#   Service2.srv
+#  Service2.srv
  )
 
 ## Generate actions in the 'action' folder
@@ -76,6 +77,7 @@ generate_messages(
   sensor_msgs
   geometry_msgs
   visualization_msgs
+  perspectives_msgs
 )
 
 ################################################
