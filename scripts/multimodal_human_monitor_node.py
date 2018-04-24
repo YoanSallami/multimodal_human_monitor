@@ -255,9 +255,9 @@ class MultimodalHumanMonitor(object):
                         if person.head_distance < min_dist:
                             min_dist = person.head_distance
                             gaze_attention_point = PointStamped()
-                            gaze_attention_point.header.frame_id = gaze_msg.header.frame_id
+                            gaze_attention_point.header.frame_id = "human-"+str(person.person_id)
                             gaze_attention_point.header.stamp = rospy.Time.now()
-                            gaze_attention_point.point = Point(t[0], t[1], t[2])
+                            gaze_attention_point.point = Point(0, 0, 0)
 
                         self.human_distances["human-"+str(human_id)] = dist
                         self.human_cameras_ids[human_id] = new_node.id
@@ -299,16 +299,13 @@ class MultimodalHumanMonitor(object):
                 if voice.person_id in self.human_cameras_ids:
                     if voice.is_speaking:
                         try:
-                            human_node = self.target.scene.nodes[self.human_cameras_ids[voice.person_id]]
-
                             self.human_speaking.append("human-" + str(voice.person_id))
                             if "human-" + str(voice.person_id) in self.human_distances:
                                 if self.human_distances["human-" + str(voice.person_id)] < min_dist:
                                     min_dist = self.human_distances["human-" + str(voice.person_id)]
-                                    point = translation_from_matrix(human_node.transformation)
                                     voice_attention_point = PointStamped()
-                                    voice_attention_point.header.frame_id = self.reference_frame
-                                    voice_attention_point.point = Point(point[0], point[1], point[2])
+                                    voice_attention_point.header.frame_id = "human-" + str(voice.person_id)
+                                    voice_attention_point.point = Point(0, 0, 0)
                         except:
                             pass
             #GAZE
@@ -345,9 +342,8 @@ class MultimodalHumanMonitor(object):
         priority = MONITORING_DEFAULT_PRIORITY
         if gaze_attention_point:
             sit_regex = "^isLookingAt\(%s" % gaze_attention_point.header.frame_id
-            for sit_desc in self.current_situations_map.keys():
-                if re.match(sit_regex, sit_desc):
-                    sit = self.target.timeline[self.current_situations_map[sit_desc]]
+            for sit in self.current_situations_map.values():
+                if re.match(sit_regex, sit.desc):
                     if sit.endtime == 0:
                         if time.time() - sit.starttime > JOINT_ATTENTION_MIN_DURATION:
                             _,_,obj = self.parse_situation_desc(sit.desc)
