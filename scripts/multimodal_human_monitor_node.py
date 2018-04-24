@@ -28,7 +28,7 @@ from multimodal_human_monitor.srv import MonitorHumans
 TF_CACHE_TIME = 5.0
 DEFAULT_CLIP_PLANE_NEAR = 0.01
 DEFAULT_CLIP_PLANE_FAR = 1000.0
-DEFAULT_HORIZONTAL_FOV = 50.0
+DEFAULT_HORIZONTAL_FOV = 60.0
 DEFAULT_ASPECT = 1.33333
 LOOK_AT_THRESHOLD = 0.6
 MIN_NB_DETECTION = 6
@@ -160,7 +160,6 @@ class MultimodalHumanMonitor(object):
         new_node.properties["clipplanefar"] = DEFAULT_CLIP_PLANE_FAR
         new_node.properties["horizontalfov"] = math.radians(DEFAULT_HORIZONTAL_FOV)
         new_node.properties["aspect"] = DEFAULT_ASPECT
-        new_node.parent = self.target.scene.rootnode.id
         return new_node
 
     def handle_monitor_humans(self, req):
