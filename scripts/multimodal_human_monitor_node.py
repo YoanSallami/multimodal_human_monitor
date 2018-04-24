@@ -15,7 +15,7 @@ from collections import deque
 from underworlds.helpers.geometry import get_world_transform
 from underworlds.tools.loader import ModelLoader
 from underworlds.helpers.transformations import translation_matrix, quaternion_matrix, euler_matrix, \
-    translation_from_matrix, quaternion_from_matrix
+    translation_from_matrix, quaternion_from_matrix, quaternion_from_euler
 from perception_msgs.msg import GazeInfoArray, VoiceActivityArray, TrackedPersonArray
 from underworlds.types import Camera, Mesh, MESH, Situation, Entity, CAMERA, ENTITY
 from geometry_msgs.msg import Point, PointStamped
@@ -447,8 +447,29 @@ class MultimodalHumanMonitor(object):
                 t.transform.rotation.z = orientation[2]
                 t.transform.rotation.w = orientation[3]
 
-                tfm = TFMessage([t])
+                # Publish a human footprint
+                t_footprint = TransformStamped()
+                t_footprint.header.frame_id = "map"
+                t_footprint.header.stamp = rospy.Time.now()
+                t_footprint.child_frame_id = node.name + "_footprint"
+                t_footprint.transform.translation.x = t.transform.translation.x
+                t_footprint.transform.translation.y = t.transform.translation.y
+                t_footprint.transform.translation.z = 0
+                map_z = numpy.transpose(numpy.atleast_2d(numpy.array([0, 0, 1, 1])))
+                human_z = numpy.dot(get_world_transform(self.target.scene, node), map_z)
+                human_z_proj = numpy.array(human_z[0], human_z[1], 0)
+                yaw = math.acos(human_z_proj.dot(numpy.array([1, 0, 0])) / math.hypot(human_z_proj[0], human_z_proj[1]))
+                rx, ry, rz, rw = quaternion_from_euler(0, 0, yaw)
+                t_footprint.transform.rotation.x = rx
+                t_footprint.transform.rotation.y = ry
+                t_footprint.transform.rotation.z = rz
+                t_footprint.transform.rotation.w = rw
+
+
+                tfm = TFMessage([t, t_footprint])
                 self.ros_pub["tf"].publish(tfm)
+
+
 
     def clean_humans(self):
         nodes_to_update = []
