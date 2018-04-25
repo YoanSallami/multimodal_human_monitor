@@ -15,7 +15,7 @@ from collections import deque
 from underworlds.helpers.geometry import get_world_transform
 from underworlds.tools.loader import ModelLoader
 from underworlds.helpers.transformations import translation_matrix, quaternion_matrix, euler_matrix, \
-    translation_from_matrix, quaternion_from_matrix, quaternion_from_euler
+    translation_from_matrix, quaternion_from_matrix, quaternion_from_euler, euler_from_matrix, euler_from_quaternion
 from perception_msgs.msg import GazeInfoArray, VoiceActivityArray, TrackedPersonArray
 from underworlds.types import Camera, Mesh, MESH, Situation, Entity, CAMERA, ENTITY
 from geometry_msgs.msg import Point, PointStamped
@@ -454,11 +454,9 @@ class MultimodalHumanMonitor(object):
                 t_footprint.transform.translation.x = t.transform.translation.x
                 t_footprint.transform.translation.y = t.transform.translation.y
                 t_footprint.transform.translation.z = 0
-                map_z = numpy.transpose(numpy.atleast_2d(numpy.array([0, 0, 1, 1])))
-                human_z = numpy.dot(get_world_transform(self.target.scene, node), map_z)
-                human_z_proj = numpy.array(human_z[0], human_z[1], 0)
-                yaw = math.acos(human_z_proj.dot(numpy.array([1, 0, 0])) / math.hypot(human_z_proj[0], human_z_proj[1]))
-                rx, ry, rz, rw = quaternion_from_euler(0, 0, yaw)
+                
+                roll, pitch, yaw = euler_from_quaternion(orientation)
+                rx, ry, rz, rw = quaternion_from_euler(0, 0, yaw+math.pi/2)
                 t_footprint.transform.rotation.x = rx
                 t_footprint.transform.rotation.y = ry
                 t_footprint.transform.rotation.z = rz
