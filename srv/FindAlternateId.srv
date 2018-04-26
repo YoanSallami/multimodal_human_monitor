@@ -1,0 +1,4 @@
+string frame_id
+---
+string result_id
+bool success
