@@ -10,10 +10,10 @@ project(multimodal_human_monitor)
 find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
+  std_srvs
   sensor_msgs
   geometry_msgs
   visualization_msgs
-  perception_msgs
   perspectives_msgs
   message_generation
 )
