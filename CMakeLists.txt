@@ -14,8 +14,9 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   geometry_msgs
   visualization_msgs
-  perspectives_msgs
   message_generation
+  perspectives_msgs
+  perception_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -52,16 +53,15 @@ find_package(catkin REQUIRED COMPONENTS
 ##   * add every package in MSG_DEP_SET to generate_messages(DEPENDENCIES ...)
 
 ## Generate messages in the 'msg' folder
-#add_message_files(
+# add_message_files(
 #  FILES
-#)
+#  )
 
 ## Generate services in the 'srv' folder
  add_service_files(
    FILES
    MonitorHumans.srv
    FindAlternateId.srv
-#  Service2.srv
  )
 
 ## Generate actions in the 'action' folder
@@ -75,10 +75,11 @@ find_package(catkin REQUIRED COMPONENTS
 generate_messages(
   DEPENDENCIES
   std_msgs
-  sensor_msgs
-  geometry_msgs
-  visualization_msgs
-  perspectives_msgs
+#  sensor_msgs
+#  geometry_msgs
+#  visualization_msgs
+#  perspectives_msgs
+#  perception_msgs
 )
 
 ################################################
