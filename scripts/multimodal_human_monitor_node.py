@@ -32,7 +32,7 @@ DEFAULT_CLIP_PLANE_FAR = 1000.0
 DEFAULT_HORIZONTAL_FOV = 60.0
 DEFAULT_ASPECT = 1.33333
 LOOK_AT_THRESHOLD = 0.6
-MIN_NB_DETECTION = 12
+MIN_NB_DETECTION = 0
 
 MIN_UPDATE_TIME_BEFORE_CLEAN = 3.0
 MAX_UPDATE_TIME_BEFORE_CLEAN = 15.0
@@ -213,6 +213,7 @@ class MultimodalHumanMonitor(object):
         gaze_attention_point = None
         voice_attention_point = None
         reactive_attention_point = None
+        min_person_id = None
         self.human_distances = {}
 
         self.human_speaking = []
@@ -228,6 +229,14 @@ class MultimodalHumanMonitor(object):
             if len(person_msg.data) > 0:
 
                 for i, person in enumerate(person_msg.data):
+                    if person.head_distance < min_dist:
+                        min_dist = person.head_distance
+                        min_person_id = person.person_id
+
+                for i, person in enumerate(person_msg.data):
+
+                    if min_person_id == person.person_id:
+                        person.person_id = 0
                     human_id = person.person_id
 
                     if human_id not in self.nb_gaze_detected:
@@ -262,8 +271,7 @@ class MultimodalHumanMonitor(object):
 
                             new_node.transformation = numpy.dot(transform, offset)
                             self.publish_perception_frame(person, person_msg.header)
-                            if person.head_distance < min_dist:
-                                min_dist = person.head_distance
+                            if person.person_id == 0:
                                 gaze_attention_point = PointStamped()
                                 gaze_attention_point.header.frame_id = "human_head_gaze-"+str(person.person_id)
                                 gaze_attention_point.header.stamp = rospy.Time.now()
@@ -309,6 +317,9 @@ class MultimodalHumanMonitor(object):
                 # VOICE
                 min_dist = 10000
                 for j, voice in enumerate(voice_msg.data):
+                    if min_person_id is not None:
+                        if voice.person_id == min_person_id:
+                            voice.person_id = 0
                     if voice.person_id in self.human_cameras_ids:
                         if voice.is_speaking:
                             try:
@@ -323,6 +334,9 @@ class MultimodalHumanMonitor(object):
                                 pass
                 #GAZE
                 for j, gaze in enumerate(gaze_msg.data):
+                    if min_person_id is not None:
+                        if gaze.person_id == min_person_id:
+                            gaze.person_id = 0
                     if gaze.person_id in self.human_cameras_ids:
                         if gaze.probability_looking_at_robot > LOOK_AT_THRESHOLD:
                             self.human_lookat["human-" + str(gaze.person_id)] = "robot"
@@ -342,7 +356,39 @@ class MultimodalHumanMonitor(object):
                         else:
                             self.human_near.append(human)
 
-            #computing speaking to
+            # if min_person_id is not None:
+            #     # update
+            #     if "human-"+str(min_person_id) in self.human_close:
+            #         self.human_close.append("human-0")
+            #         self.human_close.remove("human-" + str(min_person_id))
+            #
+            #     if "human-"+str(min_person_id) in self.human_perceived:
+            #         self.human_perceived.append("human-0")
+            #         self.human_perceived.remove("human-" + str(min_person_id))
+            #
+            #     if "human-"+str(min_person_id) in self.human_near:
+            #         self.human_near.append("human-0")
+            #         self.human_near.remove("human-"+str(min_person_id))
+            #
+            #     if "human-"+str(min_person_id) in self.human_speaking:
+            #         self.human_speaking.append("human-0")
+            #         self.human_speaking.remove("human-" + str(min_person_id))
+            #
+            #     if "human-" + str(min_person_id) in self.human_lookat:
+            #         self.human_lookat["human-0"] = self.human_lookat["human-" + str(min_person_id)]
+            #         del self.human_lookat["human-" + str(min_person_id)]
+            #
+            #     for node in nodes_to_update:
+            #         if node.name == "human-"+str(min_person_id) or node.name == "human_face-"+str(min_person_id):
+            #             node.name = "human-0"
+            #             self.human_cameras_ids["human-0"] = node.id
+            #
+            #     for i, person in enumerate(person_msg.data):
+            #         if person.person_id == min_person_id:
+            #             person.person_id = 0
+            #         self.publish_perception_frame(person, person_msg.header)
+
+            # computing speaking to
             for human in self.human_speaking:
                 if human in self.human_lookat:
                     self.human_speakingto[human] = self.human_lookat[human]
@@ -371,6 +417,7 @@ class MultimodalHumanMonitor(object):
             reactive_attention_point = voice_attention_point
             priority = VOICE_ATTENTION_PRIORITY
         if reactive_attention_point:
+            #rospy.logwarn("TEST")
             self.ros_pub["reactive"].publish(reactive_attention_point)
 
         if reactive_attention_point:
